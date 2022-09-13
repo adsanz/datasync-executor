@@ -4,9 +4,23 @@ import time, os, requests
 # bootstrap boto3
 bot = boto3.session.Session(profile_name='PLACEHOLDER', region_name='PLACEHOLDER')
 ec2 = bot.resource('ec2')
-
-## TASK LIST
+datasync = bot.client('datasync')
+## VARIABLES
+# TASK LIST
 task_arn_list = ['PLACEHOLDER']
+results = {
+    'Task failed': [],
+    'Tasks ok': [],
+    'Started at': time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime()),
+}
+# CHECKER
+db_checker = True
+efs_checker = True
+# Check for agents to be online
+agent_offline = True
+agent_online_count = 0
+
+## FUNCTIONS ##
 
 def ec2_bootstrap(ec2):
     """
@@ -40,6 +54,41 @@ def slack_warning(token,channel_id,message):
     response = requests.post('https://slack.com/api/chat.postMessage', json=payload, headers=headers)
     return response.json()
 
+def tasks_execution_checker(task,datasync):
+    """
+    Control task execution status
+    """
+    tasks_execution_list = datasync.list_task_executions(TaskArn=task.get('TaskArn'),MaxResults=1)['TaskExecutions']
+    for task_execution in tasks_execution_list:
+        if task_execution['Status'] == 'RUNNING':
+            print('Task executionfrom {} is running'.format(task['Name']))
+            return "RUNNING"
+        elif task_execution['Status'] == 'SUCCESS':
+            print('Task executionfrom {} has finished'.format(task['Name']))
+            return "SUCCESS"
+        elif task_execution['Status'] == 'ERROR':
+            print('Task executionfrom {} has failed'.format(task['Name']))
+            return "ERROR"
+
+
+def agent_checker(datasync,agent_online_count,agent_offline):
+    """
+    Check if agents are online
+    """
+    while agent_offline:
+        agents = datasync.list_agents()
+        agent_len = len(agents['Agents'])
+        for agent in agents['Agents']:
+            if agent['Status'] != 'ONLINE':
+                print("Agent {} with status {}".format(agent['Name'], agent['Status']))
+            elif agent['Status'] == 'ONLINE':
+                print("Agent {} with status {}".format(agent['Name'], agent['Status']))
+                agent_online_count = agent_online_count + 1
+        if agent_online_count == agent_len:
+            agent_offline = False
+            print("All agents are online")
+        time.sleep(1)
+
 try:
     ## Bootstrap EC2 (grab ec2 instances)   
     instances = ec2_bootstrap(ec2)
@@ -49,30 +98,17 @@ except Exception as e:
     slack_warning(os.environ['SLACK_TOKEN'],os.environ['SLACK_CHANNEL'],message)
     exit(1)
 
-# datasync execution
-datasync = bot.client('datasync')
-
-# Check for agents to be online
-agent_offline = True
-while agent_offline:
-    try: 
-        agents = datasync.list_agents()
-    except Exception as e:
-        print('DataSync error: {}'.format(e))
-        message = '[DATASYNC PIPELINE] Warning - Datasync agent listing failed with message {}, get more info on: {}'.format(e,os.environ['CI_JOB_URL'])
-        slack_warning(os.environ['SLACK_TOKEN'],os.environ['SLACK_CHANNEL'],message)
-        exit(1)
-    for agent in agents['Agents']:
-        if agent['Status'] != 'ONLINE':
-            print("Agent {} with status {}".format(agent['Name'], agent['Status']))
-            time.sleep(1)
-        elif agent['Status'] == 'ONLINE':
-            print("Agent {} with status {}".format(agent['Name'], agent['Status']))
-            agent_offline = False
-            time.sleep(1)
-
+try:
+    ## Check if agents are online
+    agent_checker(datasync,agent_online_count,agent_offline)
+except Exception as e:
+    print('DataSync error: {}'.format(e))
+    message = '[DATASYNC PIPELINE] Warning - Datasync agent listing failed with message {}, get more info on: {}'.format(e,os.environ['CI_JOB_URL'])
+    slack_warning(os.environ['SLACK_TOKEN'],os.environ['SLACK_CHANNEL'],message)
+    exit(1)
 
 try:
+    ## Start tasks
     for task_arn in task_arn_list:
         datasync.start_task_execution(TaskArn=task_arn)
 except Exception as e:
@@ -81,9 +117,6 @@ except Exception as e:
     slack_warning(os.environ['SLACK_TOKEN'],os.environ['SLACK_CHANNEL'],message)
     exit(1)
 
-## CHECKER
-db_checker = True
-efs_checker = True
 
 while db_checker or efs_checker:
     # DB checker
@@ -92,21 +125,33 @@ while db_checker or efs_checker:
     for task in tasks:
         if task['Name'] == 'EFS-AZURE' or task['Name'] == 'DB-AZURE':
             print('Task found: ' + task['Name'])
-            if task['Status'] != 'RUNNING':
+            if task['Status'] == 'AVAILABLE':
                 print('Tasks {} finished current status: {}'.format(task['Name'], task['Status']))
-                if task['Name'] == 'EFS-AZURE':
+                # Check task execution status after it's finished, stop the instance and set the checker to false. If it fails, send a warning message to slack
+                if task['Name'] == 'EFS-AZURE' and efs_checker == True:
+                    task_status = tasks_execution_checker(task,datasync)
+                    if task_status == 'SUCCESS':
+                        print('{} task has finished with no errors on execution'.format(task['Name']))
+                        results['Tasks ok'].append(task['Name'])
+                    elif task_status == 'ERROR':
+                        print('{} task has finished with errors on execution'.format(task['Name']))
+                        results['Task failed'].append(task['Name'])
                     efs_checker = False
                     instance = [instance for instance in instances if instance.tags[0]['Value'] == 'EC2-AZURE-SYNC-EFS'][0]
-                    instance.stop_instances(InstanceIds=[instance.id])
-                elif task['Name'] == 'DB-AZURE':
-                    db_checker = False
+                    instance.stop()
+                elif task['Name'] == 'DB-AZURE' and db_checker == True:
+                    if task_status == 'SUCCESS':
+                        print('{} task has finished with no errors on execution'.format(task['Name']))
+                    elif task_status == 'ERROR':
+                        print('{} task has finished with errors on execution'.format(task['Name']))
                     instance = [instance for instance in instances if instance.tags[0]['Value'] == 'EC2-AZURE-SYNC-DB'][0]
-                    instance.stop_instances(InstanceIds=[instance.id])
-                elif task['Status'] != 'SUCCESS':
-                    print('Something went wrong on task {}'.format(task['Name']))
-                    message = "[DATASYNC PIPELINE] Warning - A the datasync task '{}' has failed, please look up {} for more information".format(task['Name'], os.environ['CI_JOB_URL'])
-                    slack_warning(os.environ['SLACK_TOKEN'],os.environ['SLACK_CHANNEL'],message)
-                    exit(1)
-            else:
+                    instance.stop()                    
+                    db_checker = False
+            elif task['Status'] == 'RUNNING':
                 print('Tasks {} still running'.format(task['Name']))
+            elif task['Status'] == 'UNAVAILABLE':
+                # Unavailable status is not meaningful since when we stop the agent after it's finished, it will be unavailable always. So we just ignore it
+                pass
     time.sleep(300)
+
+print("Finished, execution results:\nTask failed: {}\nTask success: {}\nStarted at: {}\nFinished at: {}".format(results['Task failed'],results['Tasks ok'],results['Started at'],time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime())))
