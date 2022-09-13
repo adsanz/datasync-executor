@@ -1,4 +1,4 @@
-# Datasync executed
+# Datasync executor
 This script is being used to trigger datasync executions on a scheduled pipeline. On the main points where errors could happen, I added a helper function that sends a message to a slack channel of your choice. 
 
 If you need to set-up a slack channel read the docs: https://slack.com/help/articles/115005265703-Create-a-bot-for-your-workspace
