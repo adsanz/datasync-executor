@@ -45,12 +45,12 @@ try:
     instances = ec2_bootstrap(ec2)
 except Exception as e:
     print('Error on EC2 bootstrap: {}'.format(e))
-    message = 'Warning - EC2 bootstrap failed with message {}, get more info on: {}'.format(e,os.environ['CI_JOB_URL'])
+    message = '[DATASYNC PIPELINE] Warning - EC2 bootstrap failed with message {}, get more info on: {}'.format(e,os.environ['CI_JOB_URL'])
     slack_warning(os.environ['SLACK_TOKEN'],os.environ['SLACK_CHANNEL'],message)
     exit(1)
 
 # datasync execution
-datasync = bot.client('datasync', region_name='us-west-2')
+datasync = bot.client('datasync')
 
 # Check for agents to be online
 agent_offline = True
@@ -59,7 +59,7 @@ while agent_offline:
         agents = datasync.list_agents()
     except Exception as e:
         print('DataSync error: {}'.format(e))
-        message = 'Warning - Datasync agent listing failed with message {}, get more info on: {}'.format(e,os.environ['CI_JOB_URL'])
+        message = '[DATASYNC PIPELINE] Warning - Datasync agent listing failed with message {}, get more info on: {}'.format(e,os.environ['CI_JOB_URL'])
         slack_warning(os.environ['SLACK_TOKEN'],os.environ['SLACK_CHANNEL'],message)
         exit(1)
     for agent in agents['Agents']:
@@ -77,7 +77,7 @@ try:
         datasync.start_task_execution(TaskArn=task_arn)
 except Exception as e:
     print('DataSync error: {}'.format(e))
-    message = 'Warning - Datasync execution failed with message {}, get more info on: {}'.format(e,os.environ['CI_JOB_URL'])
+    message = '[DATASYNC PIPELINE] Warning - Datasync execution failed with message {}, get more info on: {}'.format(e,os.environ['CI_JOB_URL'])
     slack_warning(os.environ['SLACK_TOKEN'],os.environ['SLACK_CHANNEL'],message)
     exit(1)
 
@@ -97,14 +97,14 @@ while db_checker or efs_checker:
                 if task['Name'] == 'EFS-AZURE':
                     efs_checker = False
                     instance = [instance for instance in instances if instance.tags[0]['Value'] == 'EC2-AZURE-SYNC-EFS'][0]
-                    ec2.stop_instances(InstanceIds=[instance.id])
+                    instance.stop_instances(InstanceIds=[instance.id])
                 elif task['Name'] == 'DB-AZURE':
                     db_checker = False
                     instance = [instance for instance in instances if instance.tags[0]['Value'] == 'EC2-AZURE-SYNC-DB'][0]
-                    ec2.stop_instances(InstanceIds=[instance.id])
+                    instance.stop_instances(InstanceIds=[instance.id])
                 elif task['Status'] != 'SUCCESS':
                     print('Something went wrong on task {}'.format(task['Name']))
-                    message = "Warning - A the datasync task '{}' has failed, please look up {} for more information".format(task['Name'], os.environ['CI_JOB_URL'])
+                    message = "[DATASYNC PIPELINE] Warning - A the datasync task '{}' has failed, please look up {} for more information".format(task['Name'], os.environ['CI_JOB_URL'])
                     slack_warning(os.environ['SLACK_TOKEN'],os.environ['SLACK_CHANNEL'],message)
                     exit(1)
             else:
