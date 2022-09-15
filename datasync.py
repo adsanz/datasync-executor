@@ -2,12 +2,12 @@ import boto3
 import time, os, requests
 
 # bootstrap boto3
-bot = boto3.session.Session(profile_name='PLACEHOLDER', region_name='PLACEHOLDER')
+bot = boto3.session.Session(profile_name='', region_name='us-west-2')
 ec2 = bot.resource('ec2')
 datasync = bot.client('datasync')
 ## VARIABLES
 # TASK LIST
-task_arn_list = ['PLACEHOLDER']
+task_arn_list = []
 results = {
     'Task failed': [],
     'Tasks ok': [],
@@ -42,7 +42,7 @@ def ec2_bootstrap(ec2):
     return instances
 
 
-def slack_warning(token,channel_id,message):
+def slack_message(token,channel_id,message):
     """
     Send a warning message to slack channel
     """
@@ -81,6 +81,7 @@ def agent_checker(datasync,agent_online_count,agent_offline):
         for agent in agents['Agents']:
             if agent['Status'] != 'ONLINE':
                 print("Agent {} with status {}".format(agent['Name'], agent['Status']))
+                agent_online_count = agent_online_count - 1
             elif agent['Status'] == 'ONLINE':
                 print("Agent {} with status {}".format(agent['Name'], agent['Status']))
                 agent_online_count = agent_online_count + 1
@@ -95,7 +96,7 @@ try:
 except Exception as e:
     print('Error on EC2 bootstrap: {}'.format(e))
     message = '[DATASYNC PIPELINE] Warning - EC2 bootstrap failed with message {}, get more info on: {}'.format(e,os.environ['CI_JOB_URL'])
-    slack_warning(os.environ['SLACK_TOKEN'],os.environ['SLACK_CHANNEL'],message)
+    slack_message(os.environ['SLACK_TOKEN'],os.environ['SLACK_CHANNEL'],message)
     exit(1)
 
 try:
@@ -104,7 +105,7 @@ try:
 except Exception as e:
     print('DataSync error: {}'.format(e))
     message = '[DATASYNC PIPELINE] Warning - Datasync agent listing failed with message {}, get more info on: {}'.format(e,os.environ['CI_JOB_URL'])
-    slack_warning(os.environ['SLACK_TOKEN'],os.environ['SLACK_CHANNEL'],message)
+    slack_message(os.environ['SLACK_TOKEN'],os.environ['SLACK_CHANNEL'],message)
     exit(1)
 
 try:
@@ -114,7 +115,7 @@ try:
 except Exception as e:
     print('DataSync error: {}'.format(e))
     message = '[DATASYNC PIPELINE] Warning - Datasync execution failed with message {}, get more info on: {}'.format(e,os.environ['CI_JOB_URL'])
-    slack_warning(os.environ['SLACK_TOKEN'],os.environ['SLACK_CHANNEL'],message)
+    slack_message(os.environ['SLACK_TOKEN'],os.environ['SLACK_CHANNEL'],message)
     exit(1)
 
 
@@ -154,4 +155,5 @@ while db_checker or efs_checker:
                 pass
     time.sleep(300)
 
-print("Finished, execution results:\nTask failed: {}\nTask success: {}\nStarted at: {}\nFinished at: {}".format(results['Task failed'],results['Tasks ok'],results['Started at'],time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime())))
+message = "Finished, execution results:\nTask failed: {}\nTask success: {}\nStarted at: {}\nFinished at: {}".format(results['Task failed'],results['Tasks ok'],results['Started at'],time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime()))
+slack_message(os.environ['SLACK_TOKEN'],os.environ['SLACK_CHANNEL'],message)
